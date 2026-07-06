@@ -1,0 +1,20 @@
+{
+  "name": "nac-mini-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "NAC ain't Claude is a study project aiming to replicate Claude Code core agentic experience for the study purpose.",
+  "scripts": {
+    "start": "tsx --env-file=.env src/index.ts"
+  },
+  "keywords": [],
+  "author": "grexrr",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3"
+  }
+}

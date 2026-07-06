@@ -11,7 +11,7 @@ This is deliberately the *simplest possible version* of the loop. No streaming (
 
 ## Why this is "the" interview topic
 
-If an interviewer asks "how does an agent like Claude Code actually work," the honest answer is: it's a `while` loop around one API call. The intelligence is entirely inside the model; the code's only job is to notice when the model asked for a tool, run it, and hand the result back. Nothing about "agentic behavior" requires special infrastructure beyond this — the model itself decides when the task is done (by not calling any more tools), not the code. That inversion — code no longer encodes the decision tree, the model does — is the core mental shift from "traditional programming" to "agent engineering," and it's worth being able to say out loud in those words.
+If an interviewer asks "how does an agent like Claude Code actually work," the honest answer is: **it's a `while` loop around one API call**. The intelligence is entirely inside the model; the code's only job is to notice when the model asked for a tool, run it, and hand the result back. Nothing about "agentic behavior" requires special infrastructure beyond this — the model itself decides when the task is done (by not calling any more tools), not the code. That inversion — code no longer encodes the decision tree, the model does — is the core mental shift from "traditional programming" to "agent engineering," and it's worth being able to say out loud in those words.
 
 ---
 
@@ -21,6 +21,8 @@ This phase creates:
 
 - `package.json` — project manifest and dependency on `@anthropic-ai/sdk`
 - `tsconfig.json` — TypeScript compiler configuration
+- `.env` — your Anthropic API key, kept out of source control
+- `.gitignore` — excludes `.env` (and `node_modules/`, `dist/`) from git
 - `src/agent.ts` — the agent loop itself: `runAgentLoop()`
 - `src/index.ts` — a minimal, throwaway entry point so you can run and observe the loop (Phase 4 replaces this with a real REPL)
 
@@ -50,7 +52,7 @@ Before any of the concepts below, get the project scaffolding in place. This ste
     "private": true,
     "type": "module",
     "scripts": {
-      "start": "tsx src/index.ts"
+      "start": "tsx --env-file=.env src/index.ts"
     },
     "dependencies": {
       "@anthropic-ai/sdk": "^0.110.0"
@@ -81,10 +83,20 @@ Before any of the concepts below, get the project scaffolding in place. This ste
   }
   ```
 
-- [ ] Get an Anthropic API key and export it in your shell (the SDK's zero-argument `new Anthropic()` reads `ANTHROPIC_API_KEY` from the environment automatically — no config file needed):
+- [ ] Get an Anthropic API key and put it in a `.env` file in the project root — never commit this file or paste the key into any tutorial output:
 
-  ```bash
-  export ANTHROPIC_API_KEY=sk-ant-...
+  ```
+  ANTHROPIC_API_KEY=sk-ant-...
+  ```
+
+  The `"start"` script above already passes `--env-file=.env` to `tsx`/Node (this flag is a stable, built-in Node feature — no `dotenv` package needed), which loads `.env` into `process.env` before your code runs. The SDK's zero-argument `new Anthropic()` then reads `ANTHROPIC_API_KEY` from `process.env` automatically, exactly as it would if you'd `export`ed it in your shell — `.env` is just a more durable place to keep it than a shell session.
+
+- [ ] Create a `.gitignore` so the key never accidentally gets committed:
+
+  ```
+  node_modules/
+  dist/
+  .env
   ```
 
 ---
@@ -495,7 +507,7 @@ Phase 4 (CLI & Sessions) is where a real interactive REPL gets built. For now, w
 
 ## Verify
 
-- [ ] With `ANTHROPIC_API_KEY` exported, run `npm start -- "What time is it right now?"`. Expect: the model calls `get_current_time`, gets back an ISO timestamp string, and responds with a short natural-language sentence referencing that time. You should NOT see any tool-call JSON printed to your terminal by default — only the final text — because `extractFinalText` only reads the last message.
+- [ ] With `ANTHROPIC_API_KEY` set in `.env`, run `npm start -- "What time is it right now?"`. Expect: the model calls `get_current_time`, gets back an ISO timestamp string, and responds with a short natural-language sentence referencing that time. You should NOT see any tool-call JSON printed to your terminal by default — only the final text — because `extractFinalText` only reads the last message.
 - [ ] Uncomment the `console.log(JSON.stringify(finalMessages, ...))` line in `index.ts` and run again. Confirm the array has exactly 4 entries: `user` (your question) → `assistant` (with a `tool_use` block) → `user` (with the matching `tool_result`) → `assistant` (final text, no `tool_use`). This is Concept 3's two-per-turn growth, made concrete.
 - [ ] Try a prompt that doesn't need the tool at all, e.g. `npm start -- "What is 2 + 2?"`. Confirm the array only has 2 entries this time (`user`, then `assistant` with just a text block) — the loop exits on the very first iteration because there was no `tool_use` to react to. This demonstrates that the loop's length is entirely determined by the model's own decisions, not by anything the code chose.
 
