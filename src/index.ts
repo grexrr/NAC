@@ -33,6 +33,7 @@ async function main() {
     });
 
     console.log(extractFinalText(finalMessages));
+    console.log(JSON.stringify(finalMessages, null, 2));
 }
 
 main();
