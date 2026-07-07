@@ -200,11 +200,13 @@ export function findTool(name: string): ToolDefinition | undefined {
  * description, and readOnly flag.
  */
 export function getToolSchemas(): Anthropic.Tool[] {
-  return toolRegistry.map(({ name, description, input_schema }) => ({
-    name,
-    description,
-    input_schema,
-  }));
+  return toolRegistry.map(
+    (tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.input_schema
+    })
+  );
 }
 
 export async function executeTool(

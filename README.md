@@ -35,5 +35,6 @@ Wrote a standalone `async function*` (`stream_data`) that yields three values wi
 
 Now the core while loop has already been built but the `execute_tool()` is yet a hard coded to inserted directly the mock tool return into `messages`. Questins emerged: how to decide what tools exist? how does the tool `name` requests turn into the actual function call? and most improtantly, what invariants the code enforces that the model itself cannot be trusted to enforce, through prompting along (read-before-edit mtime checks)? 
 
-The three concrete tools built here (read_file, edit_file, list_files) are also, not coincidentally, the three tools that make any coding agent minimally useful: it can see what's in a project, see what's in a specific file, and change a file's contents. Every other tool — search, shell execution, sub-agents, MCP — is an elaboration on top of this same registry/dispatch shape, not a different architecture.
+The three concrete tools built here (read_file, edit_file, list_files) are also, not coincidentally, the three tools that make any coding agent minimally useful: it can see what's in a project, see what's in a specific file, and change a file's contents. Every other tool: search, shell execution, sub-agents, MCP, is an elaboration on top of this same registry/dispatch shape, not a different architecture.
+
 

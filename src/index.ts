@@ -1,11 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { runAgentLoop, type AgentMessage } from "./agents.js";
+import { getToolSchemas } from "./tools.js";
 
-const TIME_TOOL: Anthropic.Tool = {
-  name: "get_current_time",
-  description: "Get the current date and time in IOS 8601 format.",
-  input_schema: { type: "object", properties: {}}
-};
 
 function extractFinalText(messages: AgentMessage[]): string {
   const last = messages[messages.length - 1];
@@ -20,7 +16,7 @@ function extractFinalText(messages: AgentMessage[]): string {
 }
 
 async function main() {
-  const userMessage = process.argv.slice(2).join(" ") || "What time is it right now?";
+  const userMessage = process.argv.slice(2).join(" ") || "List the files in the current directory.?";
   const client = new Anthropic();
 
   const messages: AgentMessage[] = [{ role: "user", content: userMessage }];
@@ -29,7 +25,7 @@ async function main() {
     client,
     model: "claude-opus-4-8",
     systemPrompt: "You are a terse assistant.",
-    tools: [TIME_TOOL],
+    tools: getToolSchemas(),
   });
 
   console.log(extractFinalText(finalMessages));
