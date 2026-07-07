@@ -37,4 +37,8 @@ Now the core while loop has already been built but the `execute_tool()` is yet a
 
 The three concrete tools built here (read_file, edit_file, list_files) are also, not coincidentally, the three tools that make any coding agent minimally useful: it can see what's in a project, see what's in a specific file, and change a file's contents. Every other tool: search, shell execution, sub-agents, MCP, is an elaboration on top of this same registry/dispatch shape, not a different architecture.
 
+**Understood**
 
+- `Tool` is just an interface with basic fields of `name`, `description`, `input_schema`, `isReadOnly` (for safely parallel execution) and an `execution()` method taking input `Record<string, unknown>` (dictionary) and read-file state as its 2 arguments. `execute()` is invoked from inside `executeTool()` which is responsible for tools look-up and input injection. It is periodically called once per `tool_use` in the core agentic while loop.
+- The dispatcher is the `executeTool()` itself. Dispatcher returns error as a string, allowing the "assistant" to react to the failure and make its own decision (retry, apologize, try something else) instead of throwing an Error and breaking the agentic loop.
+- The **Mtime guard** is implemented via `ReadFileState`. `read_file` records a file's mtime when it hands the content to the model, and `edit_file` checks that recorded mtime against the file's current mtime before writing, refusing the edit if they don't match — i.e., if the file changed on disk since it was last read.
