@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { runAgentLoop, type AgentMessage } from "./agents.js";
+import { runAgentLoop, type AgentMessage } from "./agent.js";
+import { buildSystemPrompt } from "./prompt.js";
 import { getToolSchemas } from "./tools.js";
 
 
@@ -16,7 +17,7 @@ function extractFinalText(messages: AgentMessage[]): string {
 }
 
 async function main() {
-  const userMessage = process.argv.slice(2).join(" ") || "List the files in the current directory.?";
+  const userMessage = process.argv.slice(2).join(" ") || "List the files in the current directory.";
   const client = new Anthropic();
 
   const messages: AgentMessage[] = [{ role: "user", content: userMessage }];
@@ -24,7 +25,7 @@ async function main() {
   const finalMessages = await runAgentLoop(messages, {
     client,
     model: "claude-opus-4-8",
-    systemPrompt: "You are a terse assistant.",
+    systemPrompt: buildSystemPrompt(),
     tools: getToolSchemas(),
   });
 
