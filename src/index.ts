@@ -1,36 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { runAgentLoop, RunAgentLoopOptions, type AgentMessage } from "./agent.js";
-import { buildSystemPrompt } from "./prompt.js";
-import { getToolSchemas } from "./tools.js";
-
-
-function extractFinalText(messages: AgentMessage[]): string {
-  const last = messages[messages.length - 1];
-  if (!last || last.role !== "assistant" || !Array.isArray(last.content)){
-    return "";
-  }
-
-  return last.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-}
-
-async function main() {
-  const userMessage = process.argv.slice(2).join(" ") || "List the files in the current directory.";
-
-  const messages: AgentMessage[] = [{ role: "user", content: userMessage }];
-  const agentLoopOptions: RunAgentLoopOptions = {
-    client: new Anthropic(),
-    model: "claude-opus-4-8",
-    systemPrompt: buildSystemPrompt(),
-    tools: getToolSchemas(),
-  };
-
-  const finalMessages = await runAgentLoop(messages, agentLoopOptions);
-
-  console.log(extractFinalText(finalMessages));
-  console.log(JSON.stringify(finalMessages, null, 2));
-}
+// hello world
+import { main } from "./cli.js";
 
 main();
