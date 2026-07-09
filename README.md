@@ -4,15 +4,16 @@ NAC is an CLI coding agent prototype to study tool routing, file-system permissi
 
 ## What It Does (so far)
 
-One invocation = one agent task. The agent loop calls the model, executes any tools it requests against the local filesystem, feeds results back, and repeats until the model answers with no more tool calls — then prints the final answer plus a JSON dump of the full message array (left in for loop inspection).
+The agent runs either one-shot (a prompt argument → one turn → exit) or as an interactive REPL. The agent loop calls the model, executes any tools it requests against the local filesystem, feeds results back, and repeats until the model answers with no more tool calls. Conversations persist to disk after every turn and can be reloaded with `--resume`.
 
-Built so far (Phases 1–3):
+Built so far (Phases 1–4):
 
 - **Agent loop** (`src/agent.ts`) — the core call → execute-tools → feed-back `while` loop; the model alone decides when the task is done.
 - **Tool registry** (`src/tools.ts`) — `read_file`, `edit_file`, `list_files`, dispatched by name; failed calls return error strings the model can react to instead of throwing. `edit_file` is protected by a read-before-edit + mtime guard, so it can never overwrite a file that changed on disk after the agent last read it.
 - **Composed system prompt** (`src/prompt.ts`) — identity/behavior rules, a tools section generated from the registry, runtime environment info, and project instructions loaded from `CLAUDE.md` (upward directory walk) and `.claude/rules/*.md`, with recursive `@include` support.
+- **CLI & sessions** (`src/cli.ts`, `src/session.ts`) — `parseArgs` (`--resume`, `--help`, positional prompt), a `readline`-based interactive REPL with two-tier Ctrl+C handling (abort the in-flight turn while busy; double-press to exit while idle), and whole-file JSON session persistence (`~/.nac-mini-agent/sessions/<id>.json`) saved after every turn. `agent.ts` gained one field — `signal?: AbortSignal`, threaded into `client.messages.create()` — so a turn can be cancelled without leaving `messages` half-written. `index.ts` is now a two-line shim over `cli.ts`'s `main()`.
 
-Not yet built: interactive REPL & session persistence (Phase 4), streaming (Phase 5), permissions (Phase 6), context compaction (Phase 7), memory (Phase 8), sub-agents (Phase 9).
+Not yet built: streaming (Phase 5), permissions (Phase 6), context compaction (Phase 7), memory (Phase 8), sub-agents (Phase 9).
 
 ## Quick Start
 
