@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { runAgentLoop, type AgentMessage } from "./agent.js";
+import { runAgentLoop, RunAgentLoopOptions, type AgentMessage } from "./agent.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { getToolSchemas } from "./tools.js";
 
@@ -18,16 +18,16 @@ function extractFinalText(messages: AgentMessage[]): string {
 
 async function main() {
   const userMessage = process.argv.slice(2).join(" ") || "List the files in the current directory.";
-  const client = new Anthropic();
 
   const messages: AgentMessage[] = [{ role: "user", content: userMessage }];
-
-  const finalMessages = await runAgentLoop(messages, {
-    client,
+  const agentLoopOptions: RunAgentLoopOptions = {
+    client: new Anthropic(),
     model: "claude-opus-4-8",
     systemPrompt: buildSystemPrompt(),
     tools: getToolSchemas(),
-  });
+  };
+
+  const finalMessages = await runAgentLoop(messages, agentLoopOptions);
 
   console.log(extractFinalText(finalMessages));
   console.log(JSON.stringify(finalMessages, null, 2));

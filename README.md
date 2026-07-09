@@ -164,3 +164,33 @@ Not built, deliberately: a static/dynamic prompt-caching boundary — production
 - Wire `getGitContext()` into `buildEnvironmentSection()` — it's written and exported but currently never called, and the environment section only injects `Date` (no cwd/platform/shell yet, despite the notes above describing them).
 - Revert `TONE_SECTION` to the terse variant after the behavior-comparison experiment.
 - Phase 4: replace `index.ts`'s one-shot scaffolding with a real REPL (`cli.ts`) + session persistence (`session.ts`) — `buildSystemPrompt()` is already called fresh per run, which is exactly the shape the REPL needs.
+
+
+### Jul 8. 2026 - Phase 4 CLI Sessions
+
+
+**Controller.abort() and Dataflow integrity**
+To cancel the inflight `Promise` there are two main things to consider:
+
+First, `await client.messages.create(...)` is a Promise-based operation. In Node.js, the standard way to cancel this kind of in-flight asynchronous operation is to use an `AbortController`. You create a controller, pass its `signal` into the request, and when you call `controller.abort()`, the request receives the abort signal.
+
+The signature of `Anthropic.Messages.create()` is:
+
+```typescript
+(method) Messages.create(
+  params: Anthropic.Messages.MessageCreateParamsNonStreaming,
+  options?: RequestOptions
+): APIPromise<Anthropic.Messages.Message>
+```
+
+...where `RequestOptions` includes the field:
+
+```typescript
+signal?: AbortSignal | undefined | null;
+```
+
+...which means Anthropic requests can be controlled through an `AbortController`. Similar pattern can be found in the api design for other mainstream model providers. 
+
+Second, cancellation must not leave `messages` in a state that the next API call would reject. This matters because, in an agent loop, `messages` has strict structural requirements when tool use is involved. When the assistant returns a `tool_use`, the next user message must include the corresponding `tool_result`. If the matching `tool_result` is not fully appended, the next API call may be rejected.
+
+Therefore, the safe design is to treat message updates as a small transaction: do not mutate `messages` while the API request is still in flight, and only commit the assistant response after the request has completed successfully. If the request is aborted, no partial assistant message should be appended, so `messages` remains in its previous stable state.

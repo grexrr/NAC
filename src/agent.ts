@@ -9,25 +9,33 @@ export interface RunAgentLoopOptions {
   systemPrompt?: string,
   tools?: Anthropic.Tool[];
   maxTokens?: number;
+  signal?: AbortSignal;
 }
 
 export async function runAgentLoop(
   messages: AgentMessage[],
   options: RunAgentLoopOptions,
 ): Promise<AgentMessage[]> {
-  const { client, model, systemPrompt, tools, maxTokens = 1024 } = options;
+  const { client, model, systemPrompt, tools, maxTokens = 1024, signal } = options;
   const readFileState: ReadFileState = new Map();
 
   while (true) {
-    const resp = await client.messages.create({
-      model: model,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      tools: tools,
-      messages: messages
-    });
+    const resp = await client.messages.create(
+      {
+        model: model,
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        tools: tools,
+        messages: messages
+      },
+      { signal }
+    );
 
-    messages.push({ role:"assistant", content: resp.content });
+    // assistant resp
+    messages.push({
+      role:"assistant",
+      content: resp.content
+    });
 
     const toolUses = resp.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type == "tool_use"
@@ -50,6 +58,7 @@ export async function runAgentLoop(
       });
     }
 
+    // user tool result
     messages.push({
       role: "user",
       content: toolResults
