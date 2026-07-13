@@ -42,8 +42,12 @@ npm start -- "List the files in the current directory, then read package.json an
 # run a task (one-shot; the whole argument list becomes the prompt)
 npm start -- "Read src/tools.ts and summarize what each tool does."
 
-# no argument -> default prompt ("List the files in the current directory.")
+# no argument -> interactive REPL (multi-turn; "exit"/"quit" or double Ctrl+C to leave)
 npm start
+
+# resume the most recently saved session (works with both modes)
+npm start -- --resume
+npm start -- --resume "one more follow-up question"
 
 # print the composed system prompt without spending an API call
 npx tsx -e "import('./src/prompt.js').then(m => console.log(m.buildSystemPrompt()))"
@@ -169,7 +173,6 @@ Not built, deliberately: a static/dynamic prompt-caching boundary — production
 
 ### Jul 8. 2026 - Phase 4 CLI Sessions
 
-
 **Controller.abort() and Dataflow integrity**
 To cancel the inflight `Promise` there are two main things to consider:
 
@@ -195,3 +198,34 @@ signal?: AbortSignal | undefined | null;
 Second, cancellation must not leave `messages` in a state that the next API call would reject. This matters because, in an agent loop, `messages` has strict structural requirements when tool use is involved. When the assistant returns a `tool_use`, the next user message must include the corresponding `tool_result`. If the matching `tool_result` is not fully appended, the next API call may be rejected.
 
 Therefore, the safe design is to treat message updates as a small transaction: do not mutate `messages` while the API request is still in flight, and only commit the assistant response after the request has completed successfully. If the request is aborted, no partial assistant message should be appended, so `messages` remains in its previous stable state.
+
+
+### Jul 9. 2026 - Phase 4 CLI & Sessions: Implementation & Debugging
+
+`session.ts` and `cli.ts` written; `index.ts` demoted to a two-line shim over `cli.ts`'s `main()`. `agent.ts` changed by exactly one field (`signal?: AbortSignal` threaded into `client.messages.create()`'s second argument) — the loop shape itself is untouched.
+
+**Understood**
+
+- **Session persistence is serializing the array I already have.** There is no separate "session state" object — `SessionData` is `{ metadata, messages }` where `messages` is the exact same array the loop has grown since Phase 1, plus label info (`id`, `model`, `cwd`, `startTime`, `messageCount`) so a session can be found later without parsing its full contents. Whole-file JSON overwrite per save (`~/.nac-mini-agent/sessions/<id>.json`), saved from a `finally` after every turn — completed, errored, or interrupted — which is safe precisely because of the abort-integrity property above.
+- **`--resume` restores `messages` only, never the system prompt.** `buildSystemPrompt()` runs fresh at startup either way — environment facts and `CLAUDE.md` content must reflect *today*, not the day the session was first saved.
+- **Two nested loops, two stopping conditions.** The REPL loop ("keep going across turns until the human stops typing") wraps the agent loop ("keep going within one turn until the model stops calling tools"). Multi-turn is just calling `runAgentLoop` again with the same array — no new mechanism.
+- **`rl.once`, not `rl.on`.** Only one line-handler is ever pending, so a second Enter can't start a second `runAgentLoop` against the same `messages` array mid-flight. `currentController !== null` doubles as the "is the agent busy" flag — no separate boolean to keep in sync.
+- **Two-tier Ctrl+C.** Mid-turn: abort only the in-flight turn, stay in the REPL. Idle: warn on first press, exit on second. `sigintCount` resets whenever a turn is interrupted or a line is submitted, so a habitual second press right after interrupting doesn't accidentally quit.
+
+**Debugging notes**
+
+- `listSessions()` silently returned `[]` because `readFileSync(file)` used the bare filename from `readdirSync` (resolves against cwd → ENOENT) instead of `join(SESSION_DIR, file)`. The intentional empty `catch` for corrupted files swallowed the error, and the symptom surfaced two functions away as `getLatestSessionId() === null`. Lesson: an empty catch can't tell "expected bad file" from "my own path bug" — during development, a `console.error` inside such catches is cheap insurance.
+- `Property 'abort' does not exist on type 'never'`: while `runRepl` was half-written, `currentController` had a correct type annotation but zero reassignments anywhere in the function — TS treats a never-reassigned `let` as effectively-const, keeps the `null` narrowing from the initializer even inside the SIGINT closure, and `if (currentController)` narrows `null` down to `never`. The error self-resolved once `askQuestion()` added the `currentController = new AbortController()` assignment.
+- `MaxListenersExceededWarning: 11 abort listeners added to [AbortSignal]`: one controller is created per REPL turn, and its single `signal` is handed to *every* `messages.create()` call inside that turn's tool loop. Each request attaches an abort listener; Node cleans them lazily and warns past 10 — so this fires on any turn with 11+ API round-trips. A warning, not a leak (the controller is nulled and GC'd at turn end); `setMaxListeners(50, currentController.signal)` from `node:events` silences it.
+- Multi-line `npx tsx -e "..."` pastes kept getting mangled by interactive zsh (fragment executes, then `parse error near '}'`). New habit: smoke tests go in a scratch `.ts` file, run with `npx tsx <file>` — no shell quoting involved.
+- **REPL went silent after the first completed turn (fixed).** The line handler ended right after its `finally` block without re-arming — and `rl.once` fires exactly once, so after one successful turn there was no pending listener and no `> ` prompt; typed input went nowhere. The empty-input and `exit` branches re-armed correctly, which made it easy to miss that the *main* path didn't. Fix: `askQuestion()` as the last statement inside the handler, after the `finally` — every turn ends by re-arming the next one, completing the REPL cycle.
+
+**Next:**
+- Run the Phase 4 Verify checklist end to end: multi-turn memory (4 entries after 2 turns), mid-turn Ctrl+C, idle double Ctrl+C, `exit`/`quit`, `--resume` across two processes, one-shot mode still saving a resumable session.
+- Phase 5: replace `client.messages.create()` with `.stream()` — token-by-token output plus early execution of read-only tools; the REPL's one `runAgentLoop` call site is the only thing that changes in `cli.ts`.
+
+
+### Jul 9. 2026 - Phase 5 Streaming
+
+Mainstream production agents stream for the obvious reason first: psychologically, staring at a silent terminal is a painful, confidence-eroding experience — the same ten-second wait feels fine when you can watch the answer write itself. But the engineering benefit matters more. In the streaming model, the response doesn't arrive as one blob; it arrives as a sequence of segments (content blocks), and the end of a segment can be exactly the moment a tool call becomes fully specified — everything needed to run it is already on the wire, even though the model is still generating the rest of its turn. Compared to the vanilla call model — where nothing is actionable until the *entire* response has landed — this lets tool execution start early and overlap with the remaining stream, instead of queuing up behind a final result that hasn't finished arriving yet.
+

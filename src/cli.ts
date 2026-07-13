@@ -166,6 +166,7 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
         currentController = null;
         saveSession(sessionId, buildSessionData(sessionId, model, startTime, messages));
       }
+      askQuestion();
     })
   };
 
