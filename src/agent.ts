@@ -188,7 +188,7 @@ export async function runAgentLoop(
       systemPrompt,
       tools,
       maxTokens,
-      signal,
+      signal, // ctrl + c for now
       onText,
       onToolBlockComplete: (block) => {
         //wired to early tool execution

@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { execSync } from "node:child_process";
 import {
   existsSync, // path -> boolean; does this file/dir exist on disk right now
   readdirSync, // dirPath -> Dirent[]; list a directory's immediate entries (used by list_files)
@@ -109,6 +110,22 @@ function listFiles(input: { path?: string }): string {
   }
 }
 
+function runShell(input: { command: string; timeout?: number }): string {
+  try {
+    const result = execSync(input.command, {
+      encoding: "utf-8",
+      maxBuffer: 5 * 1024 * 1024,
+      timeout: input.timeout ?? 30000,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    return result || "(no output)";
+  } catch (e: any) {
+    const stderr = e.stderr ? `\nStderr: ${e.stderr}` : "";
+    const stdout = e.stdout ? `\nStdout: ${e.stdout}` : "";
+    return `Command failed (exit code ${e.status})${stdout}${stderr}`;
+  }
+}
+
 //  ================= The registry  =================
 // One object per tool: schema + behavior in the same place
 // Adding a new tool means adding one entry here — nothing else to update.
@@ -180,7 +197,23 @@ export const toolRegistry: ToolDefinition[] = [
     },
     isReadOnly: true,
     execute: (input) => listFiles(input as { path?: string }),
-  }
+  },
+
+  {
+    name: "run_shell",
+    description:
+      "Execute a shell command and return its output. Use this for running tests, installing packages, git operations, etc. Destructive-looking commands trigger a confirmation prompt.",
+    input_schema: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "The shell command to execute" },
+        timeout: { type: "number", description: "Timeout in milliseconds (default:30000)" }
+      },
+      requied: ["command"],
+    },
+    isReadOnly: false,
+    execute: (input) => runShell(input as { command: string, timeout?:number }),
+  },
 ]
 
 //  ================= Dispatcher  =================

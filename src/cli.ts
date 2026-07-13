@@ -44,18 +44,6 @@ function parseArgs(): ParsedArgs {
   };
 }
 
-function printFinalText(messages: AgentMessage[]): void {
-  const lastMsg = messages[messages.length - 1];
-  if (!lastMsg || lastMsg.role !== "assistant" || !Array.isArray(lastMsg.content)) return;
-
-  const text = lastMsg.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-
-  if (text) console.log(text);
-}
-
 function printPrompt(): void {
   process.stdout.write("\n> ");
 }
@@ -76,9 +64,7 @@ function buildSessionData(
   return { metadata: metaData, messages };
 }
 
-
 // ──────────── Repl Config & Main Loop ────────────
-
 interface ReplOptions {
   client: Anthropic;
   model: string;
@@ -100,10 +86,10 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
   let currentController: AbortController | null = null;
   let sigintCount = 0;
 
-  process.on("SIGINT", () => {
+  const handleSigint = (): void => {
     if (currentController) {
       // Mid-turn: abort only this turn's in-flight API call. The pending
-      // `await client.messages.create(...)` inside runAgentLoop rejects
+      // `await stream.finalMessage()` inside runAgentLoop rejects
       // with Anthropic.APIUserAbortError; the line handler below catches
       // it without printing an error. Nothing here touches `messages` —
       // it is left exactly as it was before this turn started, or with
@@ -124,7 +110,17 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
       console.log("\n  Press Ctrl+C again to exit.");
       printPrompt();
     }
-  });
+  };
+
+  // Registered on BOTH. With a real TTY, readline holds stdin in raw mode:
+  // Ctrl+C never becomes an OS signal — readline intercepts the raw \x03
+  // byte and emits "SIGINT" on the Interface, and with no listener there it
+  // silently closes itself (dead REPL; a later Ctrl+C then hits the whole
+  // npm/tsx process group as a real signal and tears everything down). With
+  // piped, non-TTY stdin there is no raw mode, so a genuine SIGINT signal
+  // is delivered to the process instead. Exactly one of the two fires.
+  rl.on("SIGINT", handleSigint);
+  process.on("SIGINT", handleSigint);
 
   console.log(`nac-mini-agent — session ${sessionId}. Type "exit" or "quit" to leave.`);
 
@@ -147,17 +143,19 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
 
       messages.push({ role: "user", content: input});
       currentController = new AbortController();
+
       const replOptions: RunAgentLoopOptions = {
         client: client,
         model: model,
         systemPrompt: systemPrompt,
         tools: tools,
         signal: currentController.signal,
+        onText: (text) => process.stdout.write(text),
       };
 
       try {
         await runAgentLoop(messages, replOptions);
-        printFinalText(messages);
+        process.stdout.write("\n");
       } catch (e) {
         if(!(e instanceof Anthropic.APIUserAbortError)) {
           console.error(`Error: ${(e as Error).message}`);
@@ -204,8 +202,14 @@ export async function main(): Promise<void> {
   if (prompt) {
     messages.push({ role: "user", content: prompt });
     try {
-      await runAgentLoop(messages, { client, model, systemPrompt, tools });
-      printFinalText(messages);
+      await runAgentLoop(messages, {
+        client,
+        model,
+        systemPrompt,
+        tools,
+        onText: (text) => process.stdout.write(text),
+      });
+      process.stdout.write("\n");
     } catch (e) {
       console.error(`Error: ${(e as Error).message}`);
       process.exitCode = 1;
@@ -217,5 +221,4 @@ export async function main(): Promise<void> {
       { client, model, systemPrompt, tools, sessionId, startTime }
     );
   }
-
 }

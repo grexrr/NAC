@@ -229,3 +229,21 @@ Therefore, the safe design is to treat message updates as a small transaction: d
 
 Mainstream production agents stream for the obvious reason first: psychologically, staring at a silent terminal is a painful, confidence-eroding experience — the same ten-second wait feels fine when you can watch the answer write itself. But the engineering benefit matters more. In the streaming model, the response doesn't arrive as one blob; it arrives as a sequence of segments (content blocks), and the end of a segment can be exactly the moment a tool call becomes fully specified — everything needed to run it is already on the wire, even though the model is still generating the rest of its turn. Compared to the vanilla call model — where nothing is actionable until the *entire* response has landed — this lets tool execution start early and overlap with the remaining stream, instead of queuing up behind a final result that hasn't finished arriving yet.
 
+`agent.ts` rewritten around `client.messages.stream()`; `cli.ts` changed at its two call sites (`onText` streams tokens to stdout, dead `printFinalText` removed) plus one fix the tutorial didn't anticipate (SIGINT registration, below). Loop shape unchanged: one turn, check `tool_use`, push exactly two entries, repeat.
+
+**Understood**
+
+- **A `Message` is rebuilt block-by-block on the wire.** `content_block_start` announces a block's `index` and type, `content_block_delta` carries fragments, `content_block_stop` says that index is done. Text deltas are usable strings; tool-input deltas (`input_json_delta.partial_json`) are fragments of a JSON *string* — accumulate per index, `JSON.parse` exactly once at `content_block_stop`, never earlier.
+- **`content_block_stop` is the whole point of streaming for agents.** The instant a read-only tool's block completes, `streamOneTurn` fires `onToolBlockComplete` and the loop starts `executeTool()` without awaiting it (`earlyExecutions` map, keyed by `tool_use` id) — execution overlaps the rest of the stream. Write tools never early-start (`isReadOnly` gate from Phase 2); `tool_result`s are still only sent after `finalMessage()` resolves, so the "never reply to half a turn" invariant holds.
+- **`finalMessage()` resolves to the same `Message` shape `create()` returned**, and is still the single awaited rejection point — Phase 4's abort guarantee (both `messages.push` calls sit after it) composes with streaming unchanged.
+
+**Debugging notes**
+
+- `Property 'caller' is missing in type ... ToolUseBlock` (TS2345): earlier phases only ever *read* `tool_use` blocks the API produced; reconstructing one by hand from accumulated fragments demands the full shape, so `caller` must be captured at `content_block_start` and carried through.
+- `Type 'String' is not assignable ...`: wrote `Map<string, Promise<String>>` — capital-`S` `String` is the boxed object type, not the primitive. Never use `String`/`Number`/`Boolean` in type positions.
+- **Ctrl+C mid-stream killed the whole REPL — the tutorial's `process.on("SIGINT")` design was the bug, not my transcription.** With a TTY, readline holds stdin in raw mode: Ctrl+C never becomes an OS signal; readline intercepts the `\x03` byte, emits `"SIGINT"` on the *Interface*, and with no listener there silently closes itself. Observed live: first press "does nothing" (dead REPL, stream keeps printing), second press — terminal now cooked — sends a real SIGINT to the whole npm/tsx/node process group and the supervisors tear everything down. Fix: shared `handleSigint` registered on **both** `rl.on("SIGINT")` (raw-mode TTY path) and `process.on("SIGINT")` (piped-stdin / external-signal path); exactly one fires per press. Verified by pseudo-TTY experiment and live. Also: Ctrl+C in *one-shot* mode terminating immediately is by design (no readline, no handler) — cost me a false alarm.
+
+**Next:**
+- Finish the Phase 5 Verify checklist: `[early-start]` timing logs for two reads in one turn, confirm write tools never early-start, `--resume` after an interrupted-then-continued session.
+- Phase 6: Permissions & Safety — the other consumer of `isReadOnly`, gating write tools behind human approval the same way this phase gated early execution.
+
