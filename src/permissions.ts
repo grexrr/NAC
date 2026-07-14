@@ -5,7 +5,7 @@ import { join } from "node:path";
 export type PermissionMode =
   | "default"
   | "plan"
-  | "accetEdits"
+  | "acceptEdits"
   | "bypassPermissions"
   | "dontAsk";
 
@@ -156,7 +156,7 @@ export function checkPermission(
     return { action: "deny", message: `Blocked in plan mode: ${toolName}` };
   }
 
-  if (mode === "accetEdits" && toolName === "edit_file") {
+  if (mode === "acceptEdits" && toolName === "edit_file") {
     return { action: "allow" };
   }
 

@@ -8,6 +8,7 @@ import {
   writeFileSync // path, content -> void; overwrite a file's contents synchronously
 } from "node:fs";
 import { resolve } from "node:path";
+import { checkPermission, PermissionMode } from "./permissions.js";
 
 
 /**
@@ -20,6 +21,12 @@ import { resolve } from "node:path";
  * never share read state.
  */
 export type ReadFileState = Map<string, number> // abs file path: time
+
+export interface PermissionState {
+  mode: PermissionMode,
+  confirmedActions: Set<string>;
+  confirmTool?: (message: string) => Promise<boolean>;
+}
 
 export interface ToolDefinition {
   name: string; //tool name
@@ -243,18 +250,38 @@ export function getToolSchemas(): Anthropic.Tool[] {
 }
 
 export async function executeTool(
-  name: string,
+  toolName: string,
   input: Record<string, unknown>,
-  state: ReadFileState
+  state: ReadFileState,
+  permission: PermissionState
 ): Promise<string> {
-  const tool = findTool(name);
+  const tool = findTool(toolName);
   if (!tool) {
-    return `Unknown tool: ${name}`;
+    return `Unknown tool: ${toolName}`;
+  }
+
+  const decision = checkPermission(toolName, input, tool.isReadOnly, permission.mode);
+  if (decision.action === "deny") {
+    return `Action denied: ${decision.message ?? toolName}`;
+  }
+
+  if (decision.action === "confirm") {
+    const key = decision.message ?? toolName;
+    if (!permission.confirmedActions.has(key)) {
+      if (!permission.confirmTool) {
+        return `Action denied: confirmation required but no interactive confirmation handler is available (non-interactive mode): ${key}`;
+      }
+
+      const approved = await permission.confirmTool(key);
+      if (!approved) return "User denied this action.";
+
+      permission.confirmedActions.add(key);
+    }
   }
 
   try {
     return await tool.execute(input, state);
   } catch (e) {
-    return `Error executing ${name}: ${(e as Error).message}`;
+    return `Error executing ${toolName}: ${(e as Error).message}`;
   }
 }

@@ -1,5 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { executeTool, findTool, ReadFileState } from "./tools.js";
+import { persistLargeResult } from "./compact.js";
+import { PermissionMode } from "./permissions.js";
+import { executeTool, findTool, PermissionState, ReadFileState } from "./tools.js";
 
 export type AgentMessage = Anthropic.MessageParam;
 
@@ -11,6 +13,8 @@ export interface RunAgentLoopOptions {
   maxTokens?: number;
   signal?: AbortSignal;
   onText?: (textDelta: string) => void; // onText handeler for textDelta
+  permissionMode?: PermissionMode;
+  confirmTool?: (message: string) => Promise<boolean>;
 }
 
 /**
@@ -173,8 +177,25 @@ export async function runAgentLoop(
   messages: AgentMessage[],
   options: RunAgentLoopOptions,
 ): Promise<AgentMessage[]> {
-  const { client, model, systemPrompt, tools, maxTokens = 1024, signal, onText } = options;
+  const {
+    client,
+    model,
+    systemPrompt,
+    tools,
+    maxTokens = 1024,
+    signal,
+    onText,
+    permissionMode = "default",
+    confirmTool,
+  } = options;
+
   const readFileState: ReadFileState = new Map();
+  const permission: PermissionState = {
+    mode: permissionMode,
+    confirmedActions: new Set(),
+    confirmTool
+  };
+
 
   while (true) {
 
@@ -197,7 +218,7 @@ export async function runAgentLoop(
           const input = block.input as Record<string, unknown>;
           earlyExecutions.set(
             block.id,
-            executeTool(block.name, input, readFileState)
+            executeTool(block.name, input, readFileState, permission)
           )
         }
       }
@@ -221,14 +242,18 @@ export async function runAgentLoop(
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     for (const toolUse of toolUses) {
       const earlyPromise = earlyExecutions.get(toolUse.id);
-      const result =
+      const raw_res =
         earlyPromise !== undefined
           ? await earlyPromise
           : await executeTool(
             toolUse.name,
             toolUse.input as Record<string, unknown>,
-            readFileState
+            readFileState,
+            permission
           );
+
+      // Tier1 Compact
+      const result = persistLargeResult(toolUse.name, raw_res);
 
       toolResults.push({
         type: "tool_result",

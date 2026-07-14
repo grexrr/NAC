@@ -2,34 +2,46 @@ import Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "node:crypto";
 import * as readline from "node:readline";
 import { AgentMessage, runAgentLoop, RunAgentLoopOptions } from "./agent.js";
+import { PermissionMode } from "./permissions.js";
 import { buildSystemPrompt } from "./prompt.js";
-import { getLatestSessionId, loadSession, saveSession, SessionData, SessionMetaData } from "./session.js";
+import { getLatestSessionId, loadSession, saveSession, SessionData } from "./session.js";
 import { getToolSchemas } from "./tools.js";
 
 interface ParsedArgs {
   resume: boolean;
   prompt?: string;
+  permissionMode: PermissionMode;
 }
 
 function parseArgs(): ParsedArgs {
   const args = process.argv.slice(2);
   let resume = false;
+  let permissionMode: PermissionMode = "default";
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--resume") {
       resume = true;
+    } else if (args[i] === "--yolo") {
+      permissionMode = "bypassPermissions";
+    } else if (args[i] === "--plan") {
+      permissionMode = "plan";
+    } else if (args[i] === "--accept-edits") {
+      permissionMode = "acceptEdits";
+    } else if (args[i] === "--dont-ask") {
+      permissionMode = "dontAsk";
     } else if (args[i] === "--help" || args[i] === "-h") {
       console.log(
         [
           "Usage: nac-mini-agent [options] [prompt]",
           "",
           "Options:",
-          "  --resume       Resume the most recently saved session",
-          "  --help, -h     Show this help",
-          "",
-          'With a prompt argument, runs once and exits. Without one, starts an',
-          'interactive REPL. Type "exit" or "quit", or press Ctrl+C twice, to leave.',
+          "  --resume         Resume the most recently saved session",
+          "  --yolo           bypassPermissions mode (no confirmation prompts)",
+          "  --plan           plan mode (read-only; all writes/shell blocked)",
+          "  --accept-edits   acceptEdits mode (auto-approve edit_file)",
+          "  --dont-ask       dontAsk mode (auto-deny anything needing confirmation)",
+          "  --help, -h       Show this help",
         ].join("\n")
       );
       process.exit(0);
@@ -41,11 +53,8 @@ function parseArgs(): ParsedArgs {
   return {
     resume,
     prompt: positional.length > 0 ? positional.join(" ") : undefined,
+    permissionMode,
   };
-}
-
-function printPrompt(): void {
-  process.stdout.write("\n> ");
 }
 
 function buildSessionData(
@@ -54,14 +63,16 @@ function buildSessionData(
   startTime: string,
   messages: AgentMessage[]
 ): SessionData {
-  const metaData: SessionMetaData = {
-    id: sessionId,
-    model: model,
-    cwd: process.cwd(),
-    startTime: startTime,
-    messageCount: messages.length,
-  }
-  return { metadata: metaData, messages };
+  return {
+    metadata: {
+      id: sessionId,
+      model,
+      cwd: process.cwd(),
+      startTime,
+      messageCount: messages.length,
+    },
+    messages,
+  };
 }
 
 // ──────────── Repl Config & Main Loop ────────────
@@ -72,10 +83,16 @@ interface ReplOptions {
   tools: Anthropic.Tool[];
   sessionId: string;
   startTime: string;
+  permissionMode: PermissionMode;
 }
 
+function printPrompt(): void {
+  process.stdout.write("\n> ");
+}
+
+
 async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<void> {
-  const { client, model, systemPrompt, tools, sessionId, startTime } = options;
+  const { client, model, systemPrompt, tools, sessionId, startTime, permissionMode } = options;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   // null while idle; set to the in-flight turn's controller while a call
@@ -85,6 +102,15 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
   // !== null }` (claude-code-from-scratch/src/agent.ts, lines 293-294).
   let currentController: AbortController | null = null;
   let sigintCount = 0;
+
+  function confirmTool(message: string): Promise<boolean> {
+    return new Promise((promiseResolve) => {
+      console.log(`\n  Confirm: ${message}`);
+      rl.question("  Allow? (y/n): ", (answer) => {
+        promiseResolve(answer.trim().toLowerCase().startsWith("y"));
+      });
+    });
+  }
 
   const handleSigint = (): void => {
     if (currentController) {
@@ -151,6 +177,8 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
         tools: tools,
         signal: currentController.signal,
         onText: (text) => process.stdout.write(text),
+        permissionMode,
+        confirmTool
       };
 
       try {
@@ -172,7 +200,7 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
 }
 
 export async function main(): Promise<void> {
-  const { resume, prompt } = parseArgs();
+  const { resume, prompt, permissionMode } = parseArgs();
 
   const client = new Anthropic();
   const model = "claude-opus-4-8";
@@ -208,6 +236,7 @@ export async function main(): Promise<void> {
         systemPrompt,
         tools,
         onText: (text) => process.stdout.write(text),
+        permissionMode,
       });
       process.stdout.write("\n");
     } catch (e) {
@@ -218,7 +247,7 @@ export async function main(): Promise<void> {
   } else {
     await runRepl(
       messages,
-      { client, model, systemPrompt, tools, sessionId, startTime }
+      { client, model, systemPrompt, tools, sessionId, startTime, permissionMode }
     );
   }
 }
