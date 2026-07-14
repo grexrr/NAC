@@ -252,7 +252,7 @@ export async function runAgentLoop(
             permission
           );
 
-      // Tier1 Compact
+      // Tier 0 Compact
       const result = persistLargeResult(toolUse.name, raw_res);
 
       toolResults.push({

@@ -216,7 +216,7 @@ export const toolRegistry: ToolDefinition[] = [
         command: { type: "string", description: "The shell command to execute" },
         timeout: { type: "number", description: "Timeout in milliseconds (default:30000)" }
       },
-      requied: ["command"],
+      required: ["command"],
     },
     isReadOnly: false,
     execute: (input) => runShell(input as { command: string, timeout?:number }),
