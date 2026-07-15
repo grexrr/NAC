@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { persistLargeResult } from "./compact.js";
+import { checkAndCompact, CompactionState, persistLargeResult, runCompressionPipeline } from "./compact.js";
 import { PermissionMode } from "./permissions.js";
 import { executeTool, findTool, PermissionState, ReadFileState } from "./tools.js";
 
@@ -15,6 +15,7 @@ export interface RunAgentLoopOptions {
   onText?: (textDelta: string) => void; // onText handeler for textDelta
   permissionMode?: PermissionMode;
   confirmTool?: (message: string) => Promise<boolean>;
+  compaction?: CompactionState
 }
 
 /**
@@ -187,6 +188,7 @@ export async function runAgentLoop(
     onText,
     permissionMode = "default",
     confirmTool,
+    compaction
   } = options;
 
   const readFileState: ReadFileState = new Map();
@@ -196,8 +198,15 @@ export async function runAgentLoop(
     confirmTool
   };
 
+  if (compaction) {
+    await checkAndCompact(messages, compaction, client, model);
+  }
 
   while (true) {
+
+    if (compaction) {
+      runCompressionPipeline(messages, compaction);
+    }
 
     // Tools with content_block_stop already fired during this turn's stream
     // Basically a read-only tool registry for the mvp
