@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "node:crypto";
 import * as readline from "node:readline";
 import { AgentMessage, runAgentLoop, RunAgentLoopOptions } from "./agent.js";
+import { CompactionState, createCompactionState } from "./compact.js";
 import { PermissionMode } from "./permissions.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { getLatestSessionId, loadSession, saveSession, SessionData } from "./session.js";
@@ -84,6 +85,7 @@ interface ReplOptions {
   sessionId: string;
   startTime: string;
   permissionMode: PermissionMode;
+  compaction: CompactionState;
 }
 
 function printPrompt(): void {
@@ -92,7 +94,7 @@ function printPrompt(): void {
 
 
 async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<void> {
-  const { client, model, systemPrompt, tools, sessionId, startTime, permissionMode } = options;
+  const { client, model, systemPrompt, tools, sessionId, startTime, permissionMode, compaction } = options;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   // null while idle; set to the in-flight turn's controller while a call
@@ -178,7 +180,8 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
         signal: currentController.signal,
         onText: (text) => process.stdout.write(text),
         permissionMode,
-        confirmTool
+        confirmTool,
+        compaction
       };
 
       try {
@@ -210,6 +213,7 @@ export async function main(): Promise<void> {
   let messages: AgentMessage[] = [];
   let sessionId = randomUUID().slice(0, 8);
   const startTime = new Date().toISOString();
+  const compactionState = createCompactionState();
 
   if (resume) {
     const latestId = getLatestSessionId();
@@ -237,6 +241,7 @@ export async function main(): Promise<void> {
         tools,
         onText: (text) => process.stdout.write(text),
         permissionMode,
+        compaction: compactionState,
       });
       process.stdout.write("\n");
     } catch (e) {
@@ -247,7 +252,7 @@ export async function main(): Promise<void> {
   } else {
     await runRepl(
       messages,
-      { client, model, systemPrompt, tools, sessionId, startTime, permissionMode }
+      { client, model, systemPrompt, tools, sessionId, startTime, permissionMode, compaction:compactionState }
     );
   }
 }
