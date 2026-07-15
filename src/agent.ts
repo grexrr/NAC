@@ -233,6 +233,11 @@ export async function runAgentLoop(
       }
     })
 
+    if (compaction) {
+      compaction.lastInputTokens = response.usage.input_tokens;
+      compaction.lastApiCallTime = Date.now();
+    }
+
     // assistant resp
     messages.push({
       role:"assistant",
