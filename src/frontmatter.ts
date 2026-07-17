@@ -3,7 +3,7 @@ export interface FrontmatterResult {
   body: string;
 }
 
-export function parstFrontmatter(content: string): FrontmatterResult {
+export function parseFrontmatter(content: string): FrontmatterResult {
   const lines = content.split("\n");
   if (lines[0]?.trim() !== "---") return {meta: {}, body: content};
 
