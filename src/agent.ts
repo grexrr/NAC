@@ -183,7 +183,7 @@ export async function runAgentLoop(
     model,
     systemPrompt,
     tools,
-    maxTokens = 1024,
+    maxTokens = 16384,
     signal,
     onText,
     permissionMode = "default",

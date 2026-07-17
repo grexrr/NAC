@@ -92,7 +92,6 @@ function printPrompt(): void {
   process.stdout.write("\n> ");
 }
 
-
 async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<void> {
   const { client, model, systemPrompt, tools, sessionId, startTime, permissionMode, compaction } = options;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
