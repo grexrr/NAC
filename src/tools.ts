@@ -8,6 +8,7 @@ import {
   writeFileSync // path, content -> void; overwrite a file's contents synchronously
 } from "node:fs";
 import { resolve } from "node:path";
+import { deleteMemory, MemoryType, saveMemory, VALID_MEMORY_TYPES } from "./memory.js";
 import { checkPermission, PermissionMode } from "./permissions.js";
 
 
@@ -133,6 +134,33 @@ function runShell(input: { command: string; timeout?: number }): string {
   }
 }
 
+function saveMemoryTool(input: {
+  name: string;
+  description: string;
+  type: string;
+  content: string;
+}): string {
+  if (!VALID_MEMORY_TYPES.has(input.type as MemoryType)) {
+    return `Error: invalid memory type "${input.type}". Must be one of: user, feedback, project, reference.`;
+  }
+
+  const filename = saveMemory({
+    name: input.name,
+    description: input.description,
+    type: input.type as MemoryType,
+    content: input.content,
+  });
+
+  return `Saved memory to ${filename}. The memory index has been updated.`;
+}
+
+function forgetMemoryTool(input: { filename: string }): string {
+  const ok = deleteMemory(input.filename);
+  return ok
+    ? `Deleted memory ${input.filename}.`
+    : `Error: no memory file named "${input.filename}" (check the index for exact filenames).`;
+}
+
 //  ================= The registry  =================
 // One object per tool: schema + behavior in the same place
 // Adding a new tool means adding one entry here — nothing else to update.
@@ -220,6 +248,36 @@ export const toolRegistry: ToolDefinition[] = [
     },
     isReadOnly: false,
     execute: (input) => runShell(input as { command: string, timeout?:number }),
+  },
+
+  {
+    name: "save_memory",
+    description: "Save a fact to persistent, cross-session memory. type must be one of: user, feedback, project, reference. Only save information that is NOT derivable by reading the current code, git history, or CLAUDE.md.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Short, human-readable memory name" },
+        description: { type: "string", description: "One-line description used later to judge relevance — be specific" },
+        type: { type: "string", enum: ["user", "feedback", "project", "reference"], description: "One of: user, feedback, project, reference" },
+        content: { type: "string", description: "The memory content. For feedback/project types, include a Why: and How to apply: line." },
+      },
+      required: ["name", "description", "type", "content"],
+    },
+    isReadOnly: false,
+    execute: (input) => saveMemoryTool(input as { name: string; description: string; type: string; content: string }),
+  },
+
+  {
+    name: "forget_memory",
+    description: "Delete a saved memory by its filename (as shown in the memory index).",
+    input_schema: {
+      type: "object",
+      properties: {
+        filename: { type: "string", description:  "The memory file's filename, e.g. feedback_no_summary.md"}
+      }
+    },
+    isReadOnly: false,
+    execute: (input) => forgetMemoryTool(input as { filename: string }),
   },
 ]
 

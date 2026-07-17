@@ -21,7 +21,7 @@ export interface MemoryEntry {
   content: string;
 }
 
-const VALID_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
+export const VALID_MEMORY_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
 const MAX_INDEX_LINES = 200;
 const MAX_INDEX_BYTES = 25000;
 
@@ -91,7 +91,7 @@ export function listMemories(): MemoryEntry[] {
       entries.push({
         name: meta.name,
         description: meta.description || "",
-        type: (VALID_TYPES.has(meta.type as MemoryType) ? meta.type : "project") as MemoryType,
+        type: (VALID_MEMORY_TYPES.has(meta.type as MemoryType) ? meta.type : "project") as MemoryType,
         filename: file,
         content: body
       });
