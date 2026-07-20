@@ -252,6 +252,59 @@ Mainstream production agents stream for the obvious reason first: psychologicall
 
 Every phase before this one grew `messages` and never shrank it — fine for tutorial-length sessions, but the array is unbounded and the context window is not. This phase adds the shrinking half: a tiered compression system where each layer is strictly more aggressive, more expensive, and less reversible than the one before, so the cheap interventions always get first shot and the destructive one (a full LLM re-summarization) is the last resort rather than the first response. All size-based triggering hangs off one number, `state.lastInputTokens` — the `usage.input_tokens` the API reported on the *previous* response: a free, authoritative, server-side measurement of conversation size that is always exactly one turn stale. That staleness is why `CompactionState` lives at `cli.ts` scope and survives across `runAgentLoop` calls (unlike the per-call `ReadFileState`), and why it's reset to 0 after a compaction — the old measurement no longer describes the shrunken array, and the next response re-fills the gauge with the true number. The safety rule shaping every tier: each `tool_use` block must keep its paired `tool_result` in the very next message, or the next API call 400s. Tiers 0–3 are pairing-safe *by construction* — they only ever rewrite the `content` string inside an existing `tool_result` block, never removing a block or a message; Tier 4 is the only layer that deletes messages, and it's safe *by timing* — it runs only at the one moment the array is guaranteed to end in plain user text — rather than by inspection.
 
+```
+Tool executes
+     │
+     ▼
+raw result string ────────────────────────────────────────────┐
+     │                                                        │
+     ▼  Tier 0: Disk Offload (agent.ts, EVERY tool call)      │
+  >30KB? ──yes──▶ write full text to disk                     │
+     │no                     │                                │
+     ▼                       ▼                                │
+result string           preview + path string (small)         │
+     └───────────────────────┴──────────────────┬─────────────┘
+                                                ▼
+                              wrapped into a tool_result block,
+                              pushed into messages[]  (Phase 1 shape)
+
+  ─────────── one messages[] array, growing turn after turn ────────────────
+
+  Per model-turn, BEFORE each streamOneTurn() call
+  (Tiers 1–3 — content-string rewrites only, never remove a block/message):
+
+     tool_result.content (string)
+            │
+            ▼  Tier 1: Budget            (utilization ≥ 50% / 70%)
+     over char budget? ──yes──▶ head + "...N truncated..." + tail
+            │
+            ▼  Tier 2: Snip              (utilization ≥ 60%, read_file/list_files only)
+     older than 3 most-recent? ──yes──▶ "[Content snipped - re-read if needed]"
+            │
+            ▼  Tier 3: Microcompact      (idle ≥ 5 min)
+     older than 3 most-recent? ──yes──▶ "[Old tool result content cleared]"
+            │
+            ▼
+     same tool_result block, shorter content — tool_use/tool_result
+     pairing untouched throughout (Concept 4's invariant)
+
+  Once per USER turn, BEFORE the while(true) loop starts
+  (Tier 4 — the one tier that removes whole messages):
+
+     messages[]  (N entries: history + trailing plain-text user msg)
+            │
+            ▼  utilization > 85%?
+            │ no ──▶ unchanged
+            ▼ yes
+     compactConversation():
+       slice off last msg (guaranteed plain user text here)
+       summarize everything before it (one LLM call)
+            │
+            ▼
+     messages[]  (3 entries: [summary(user), ack(assistant), last user msg])
+     — history is gone except whatever Tier 0 already offloaded to disk
+```
+
 **Tier 0: Disk Offload**
 
 The pre-filter, not one of the four numbered tiers — it runs at tool-execution time, before a result ever enters `messages`. Any tool result over 30KB (`Buffer.byteLength` — bytes, not UTF-16 units) is written in full to `~/.nac-mini-agent/tool-results/`, and what enters the conversation instead is a short preview (first 200 lines) plus the file path. Nothing is lost, only deferred: the model already has `read_file`, so it can retrieve the full content on demand. Zero API cost, fully reversible, runs unconditionally on every tool call — which is why it sits in `agent.ts`'s tool-processing loop (between resolving the raw result string and building the `tool_result` block) rather than in the per-turn compression pipeline.
@@ -278,3 +331,70 @@ This demo follows the cold-cache path — compressing the local cache indiscrimi
 **Tier 4: Auto-compact (LLM Summarization)**
 
 The last resort, and the only tier that is neither free nor structure-preserving: past 85% of the effective window (context window minus 20K reserved output tokens), the *entire* history is replaced by an LLM-written summary — one real API call, irreversibly lossy (anything not already offloaded to disk by Tier 0 is gone). Tiers 1–3 only ever rewrite `content` strings inside existing `tool_result` blocks, so they can run on every model turn; Tier 4 removes whole messages, which is exactly where the pairing invariant becomes load-bearing. It stays safe by *when* it runs, not by cleverness: checked once per user turn, immediately after the new question is pushed and before the `while` loop starts — the one moment the array is guaranteed to be `[...complete history, plain-text user question]`. `compactConversation` slices off that last message, summarizes the prefix (which by construction contains only complete `tool_use`/`tool_result` pairs, discarded as whole pairs), and rebuilds to three messages: `[summary (user), ack (assistant), original question (user)]` — history is compressed, but the not-yet-answered question survives *verbatim*, because the model still has to answer it. Two hardenings beyond the tutorial: an early guard refuses to compact at all if the conversation ends in tool content (calling this mid-tool-loop either 400s the summarize request — `tool_use ids found without tool_result blocks` — or re-appends an orphaned `tool_result`, since a tool_result message is *also* `role: "user"`), and the re-append check requires `typeof content === "string"` for the same reason. The rebuild mutates via `splice(0, length, ...rebuilt)`, never reassignment — `cli.ts` holds a reference to this exact array, and rebinding the local parameter would be invisible outside the function.
+
+
+### Jul 20. 2026 - Phase 8 Memory System
+
+Session persistence (Phase 4, `--resume`) and compaction (Phase 7) both operate on *one conversation's* `messages` array — reload it, shrink it, but it's still the same thread. This phase adds a second, independent store: small Markdown files on disk, scoped per-project (sha256 of `cwd`), that survive into conversations that have never seen them before. Two shapes get transformed here, and they're easy to conflate because both start from "a memory": (1) the *storage* shape — a saved fact becoming a frontmatter file plus one index line — and (2) the *recall* shape — files on disk becoming a cheap manifest, becoming a model's filename picks, becoming full content read back in. Recall never sends full memory bodies to the selector model; only the manifest (filenames + one-line descriptions) does, which is what keeps the side query cheap regardless of how many memories accumulate.
+
+```
+save_memory tool call
+  { name, description, type, content }        (Omit<MemoryEntry, "filename">)
+         │
+         ▼  saveMemory()
+  frontmatter file on disk: <type>_<slugified-name>.md
+  ---
+  name: ...
+  description: ...
+  type: ...
+  ---
+  <content>
+         │
+         ▼  updateMemoryIndex()  (re-scans ALL memory files via listMemories())
+  MEMORY.md  — one line per memory:
+  "- **[name](file)** (type) — description"
+  (loaded whole into the system prompt every session — buildMemoryPromptSection())
+
+  ── separately, at recall time ────────────────────────────────────────
+
+  memory .md files on disk
+         │
+         ▼  scanMemoryHeaders()  (reads only the first 30 lines — frontmatter only,
+         │                        never the full body)
+  MemoryHeader[]  { filename, filePath, mtimeMs, description, type }
+         │
+         ▼  formatMemoryManifest()
+  one manifest string:
+  "- [type] filename (ISO timestamp): description"   (one line per header —
+   NEVER full memory content; this is what keeps the side query cheap)
+         │
+         ▼  selectRelevantMemories(query, sideQuery, alreadySurfaced)
+             — a second, ordinary client.messages.create() call, not a
+               vector DB — asks the model to pick ≤5 filenames from the
+               manifest. alreadySurfaced is filtered OUT of the candidate
+               list before this call, not after, so a full 5-slot answer
+               is never wasted on memories already shown this session.
+         │
+         ▼
+  { selected_memories: ["a.md", "b.md"] }   (JSON text, regex-extracted,
+                                              tolerant of a Markdown fence)
+         │
+         ▼  for each selected filename: read full file, cap at 4KB
+  RelevantMemory[]  { path, content, mtimeMs, header }
+         │
+         ▼  (not yet wired — Implement 4/5: async prefetch + agent.ts injection)
+  formatted block appended into the turn's context, prefetched in the
+  background so the side query never adds perceived latency to the turn
+  it was started for
+```
+
+**Understood**
+
+- **Storage and recall are separate paths through the same files.** `saveMemory`/`listMemories`/`updateMemoryIndex` read and write full `MemoryEntry` objects (frontmatter + body). `scanMemoryHeaders`/`formatMemoryManifest` deliberately read only the first 30 lines — enough to get past the frontmatter block — because the recall selector should never pay to read (or send) full memory bodies for files that turn out to be irrelevant.
+- **The closed four-type taxonomy (`user`/`feedback`/`project`/`reference`) is what makes the manifest small enough to be cheap.** A model given free-form categories would drift in vocabulary turn to turn, degrading a non-keyword selector like this one. `feedback` records confirmations as well as corrections — the rule is "not derivable from the current project state," and a validated judgment call is exactly as non-derivable as a correction.
+- **`meta.description || ""` and `meta.type` validation exist because `Record<string, string>` lies.** A hand-edited or malformed frontmatter file can genuinely omit a key at runtime even though TypeScript's index signature promises `string`. Both `listMemories()` and `scanMemoryHeaders()` guard against this — the same class of gap the `undefined`-in-`MEMORY.md` bug came from.
+
+**Next:**
+- Implement 4: `startMemoryPrefetch()` (the async-prefetch gates) and `formatMemoriesForInjection()`.
+- Implement 5: wire the prefetch/injection into `agent.ts`, at the exact point relative to Phase 7's `checkAndCompact()` that Concept 5 calls this phase's crux.
+- Implement 6/7: the system-prompt section into `prompt.ts`, and `MemoryRecallState` + `/memory` into `cli.ts`.

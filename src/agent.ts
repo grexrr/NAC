@@ -15,7 +15,7 @@ export interface RunAgentLoopOptions {
   onText?: (textDelta: string) => void; // onText handeler for textDelta
   permissionMode?: PermissionMode;
   confirmTool?: (message: string) => Promise<boolean>;
-  compaction?: CompactionState
+  compaction?: CompactionState;
 }
 
 /**

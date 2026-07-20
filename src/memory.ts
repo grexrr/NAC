@@ -24,6 +24,7 @@ export interface MemoryEntry {
 export const VALID_MEMORY_TYPES = new Set<MemoryType>(["user", "feedback", "project", "reference"]);
 const MAX_INDEX_LINES = 200;
 const MAX_INDEX_BYTES = 25000;
+const MAX_SESSION_MEMORY_BYTES = 60 * 1024;
 
 function getProjectHash(): string {
   return createHash("sha256").update(process.cwd()).digest("hex").slice(0, 16);
@@ -181,7 +182,7 @@ export function formatMemoryManifest(headers: MemoryHeader[]): string {
   return headers
     .map((h) => {
       const tag = h.type ? `[${h.type}] ` : "";
-      const ts = new Date(h.mtimeMs).toISOString;
+      const ts = new Date(h.mtimeMs).toISOString();
       return h.description
         ? `- ${tag}${h.filename} (${ts}: ${h.description})`
         : `- ${tag}${h.filename} (${ts})`;
@@ -198,7 +199,7 @@ export function memoryAge(mtimeMs: number): string {
 }
 
 export function memoryFreshnessWarning(mtimeMs: number): string {
-  const days = Math.max(0,Math.floor((Date.now() - mtimeMs) / 86_400_400));
+  const days = Math.max(0,Math.floor((Date.now() - mtimeMs) / 86_400_000));
   if (days <= 1) return "";
   return `This memory is ${days} days old. Memories are point-in-time observations, not live state — claims about code behavior may be outdated. Verify against current code before asserting as fact.`;
 }
@@ -244,7 +245,6 @@ export async function selectRelevantMemories(
 
     const parsed = JSON.parse(jsonMatch[0]) as { selected_memories?: string[] };
     const selectedFilenames = parsed.selected_memories || [];
-    if (!selectedFilenames) return [];
 
     const filenameSet = new Set(selectedFilenames);
     const selected = candidates.filter((h) => filenameSet.has(h.filename));
@@ -306,4 +306,79 @@ export function buildMemoryPromptSection(): string {
     ``,
     index ? `## Current Memory Index\n${index}` : `(No memories saved yet.)`,
   ].join("\n");
+}
+
+export function formatMemoriesForInjection(memories: RelevantMemory[]): string {
+  return memories
+  .map((m) => `<system-reminder>\n${m.header}\n\n${m.content}\n</system-reminder>`)
+  .join("\n\n");
+}
+
+
+// ------ Async Prefetch ------
+
+export interface MemoryPrefetch {
+  promise: Promise<RelevantMemory[]>;
+  settled: boolean;
+  consumed: boolean;
+}
+
+/** Query substantial enough to be worth a semantic-match API call: multi-word, or 2+ CJK characters. */
+function isQuerySubstantial(query: string): boolean {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) return false;
+  const cjkRegex = /[一-鿿぀-ヿ가-힯]/g;
+  const cjkMatches = trimmed.match(cjkRegex);
+  if (cjkMatches && cjkMatches.length >= 2) return true;
+  if (/\s/.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * Kick off semantic recall in the background without blocking the caller.
+ * Returns null (skip recall entirely) under any of three gates:
+ *     - the query is too short to match meaningfully,
+ *     - this session has already spent its 60KB recall budget
+ *     - no memory files exist yet
+ * each one saves a wasted API call. Returns a MemoryPrefetch handle otherwise: `.promise`
+ * resolves in the background; `.settled`/`.consumed` let a caller poll it
+ * without ever awaiting (and therefore never blocking on) it directly.
+ */
+
+export function startMemoryPrefetch(
+  query: string,
+  sideQuery: SideQueryFn,
+  alreadySurfaced: Set<string>,
+  sessionMemoryBytes: number,
+  signal?: AbortSignal
+): MemoryPrefetch | null {
+  if (!isQuerySubstantial(query)) return null;
+  if (sessionMemoryBytes >= MAX_SESSION_MEMORY_BYTES) return null;
+
+  const dir = getMemoryDir();
+  const hasMemories = readdirSync(dir).some((f) => f.endsWith(".md") && f !== "MEMORY.md");
+  if (!hasMemories) return null;
+
+  const handle: MemoryPrefetch = {
+    promise: selectRelevantMemories(query, sideQuery, alreadySurfaced, signal),
+    settled: false,
+    consumed: false,
+  };
+  handle.promise.then(
+    () => { handle.settled = true }, // onFufilled
+    () => { handle.settled = true }  // onRejected
+  );
+  return handle;
+}
+
+
+// ------ Session-scoped recall bookkeeping ------
+
+export interface MemoryRecallState {
+  alreadySurfaced: Set<string>;
+  sessionMemoryBytes: number;
+}
+
+export function createMemoryRecallState(): MemoryRecallState {
+  return { alreadySurfaced: new Set(), sessionMemoryBytes: 0 };
 }
