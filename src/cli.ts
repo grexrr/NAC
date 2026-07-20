@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as readline from "node:readline";
 import { AgentMessage, runAgentLoop, RunAgentLoopOptions } from "./agent.js";
 import { CompactionState, createCompactionState } from "./compact.js";
+import { createMemoryRecallState, listMemories, MemoryRecallState } from "./memory.js";
 import { PermissionMode } from "./permissions.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { getLatestSessionId, loadSession, saveSession, SessionData } from "./session.js";
@@ -86,6 +87,7 @@ interface ReplOptions {
   startTime: string;
   permissionMode: PermissionMode;
   compaction: CompactionState;
+  memoryRecall: MemoryRecallState;
 }
 
 function printPrompt(): void {
@@ -93,7 +95,7 @@ function printPrompt(): void {
 }
 
 async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<void> {
-  const { client, model, systemPrompt, tools, sessionId, startTime, permissionMode, compaction } = options;
+  const { client, model, systemPrompt, tools, sessionId, startTime, permissionMode, compaction, memoryRecall } = options;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   // null while idle; set to the in-flight turn's controller while a call
@@ -149,7 +151,9 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
   rl.on("SIGINT", handleSigint);
   process.on("SIGINT", handleSigint);
 
-  console.log(`nac-mini-agent — session ${sessionId}. Type "exit" or "quit" to leave.`);
+  console.log(
+    `nac-mini-agent — session ${sessionId}. Type "exit" or "quit" to leave, or "/memory" to list saved memories.`
+  );
 
   const askQuestion = (): void => {
     printPrompt();
@@ -168,6 +172,20 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
         process.exit(0);
       }
 
+      if (input === "/memory") {
+        const memories = listMemories();
+        if (memories.length === 0) {
+          console.log("No memories saved yet.")
+        } else {
+          console.log(`${memories.length} memories:`);
+          for (const m of memories) {
+            console.log(`    [${m.type}] ${m.name} — ${m.description}`);
+          }
+        }
+        askQuestion();
+        return;
+      }
+
       messages.push({ role: "user", content: input});
       currentController = new AbortController();
 
@@ -180,7 +198,8 @@ async function runRepl(messages: AgentMessage[], options: ReplOptions): Promise<
         onText: (text) => process.stdout.write(text),
         permissionMode,
         confirmTool,
-        compaction
+        compaction,
+        memoryRecall
       };
 
       try {
@@ -213,6 +232,7 @@ export async function main(): Promise<void> {
   let sessionId = randomUUID().slice(0, 8);
   const startTime = new Date().toISOString();
   const compactionState = createCompactionState();
+  const memoryRecall = createMemoryRecallState();
 
   if (resume) {
     const latestId = getLatestSessionId();
@@ -241,6 +261,7 @@ export async function main(): Promise<void> {
         onText: (text) => process.stdout.write(text),
         permissionMode,
         compaction: compactionState,
+        memoryRecall
       });
       process.stdout.write("\n");
     } catch (e) {
@@ -251,7 +272,7 @@ export async function main(): Promise<void> {
   } else {
     await runRepl(
       messages,
-      { client, model, systemPrompt, tools, sessionId, startTime, permissionMode, compaction:compactionState }
+      { client, model, systemPrompt, tools, sessionId, startTime, permissionMode, compaction:compactionState, memoryRecall }
     );
   }
 }

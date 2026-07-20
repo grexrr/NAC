@@ -214,7 +214,7 @@ export async function compactConversation(
   const summaryText = summaryResp.content[0]?.type === "text" ? summaryResp.content[0].text : "No summary available";
 
   const rebuilt: AgentMessage[] = [
-    { role: "user", content: `[Previous converssation summary]\n${summaryText}`},
+    { role: "user", content: `[Previous conversation summary]\n${summaryText}`},
     {
       role: "assistant",
       content: "Understood. I have the context from our previous conversation. How can I continue helping?",

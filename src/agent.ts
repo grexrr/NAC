@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { checkAndCompact, CompactionState, persistLargeResult, runCompressionPipeline } from "./compact.js";
+import { formatMemoriesForInjection, MemoryPrefetch, MemoryRecallState, SideQueryFn, startMemoryPrefetch } from "./memory.js";
 import { PermissionMode } from "./permissions.js";
 import { executeTool, findTool, PermissionState, ReadFileState } from "./tools.js";
 
@@ -16,6 +17,7 @@ export interface RunAgentLoopOptions {
   permissionMode?: PermissionMode;
   confirmTool?: (message: string) => Promise<boolean>;
   compaction?: CompactionState;
+  memoryRecall?: MemoryRecallState;
 }
 
 /**
@@ -29,6 +31,36 @@ interface TrackedToolBlock {
   name: string;
   caller: Anthropic.ToolUseBlock["caller"];
   inputJson: string
+}
+
+/**
+ * Build the sideQuery function memory.ts's selectRelevantMemories() needs:
+ * a plain (system, userMessage, signal) -> string function. This lives
+ * here, not in memory.ts, specifically so memory.ts has no dependency on
+ * @anthropic-ai/sdk or a live client — the same reasoning Phase 2 gave for
+ * keeping tools.ts's registry self-contained. Uses max_tokens: 256 and the
+ * SAME model the caller configured for the main conversation — not a
+ * separate, cheaper model (see memory.ts's own doc comment on
+ * selectRelevantMemories for why real Claude Code differs here).
+ */
+function buildSideQuery(client: Anthropic, model: string): SideQueryFn {
+  return async (system, userMessage, signal) => {
+    const resp = await client.messages.create(
+      { model, max_tokens: 256, system, messages:[{ role: "user", content: userMessage }] },
+      { signal }
+    );
+
+    return resp.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+  };
+}
+
+function extractLastUserText(messages: AgentMessage[]): string {
+  const last = messages[messages.length - 1];
+  if (!last || typeof last.content !== "string") return "";
+  return last.content;
 }
 
 /**
@@ -188,7 +220,8 @@ export async function runAgentLoop(
     onText,
     permissionMode = "default",
     confirmTool,
-    compaction
+    compaction,
+    memoryRecall
   } = options;
 
   const readFileState: ReadFileState = new Map();
@@ -202,10 +235,49 @@ export async function runAgentLoop(
     await checkAndCompact(messages, compaction, client, model);
   }
 
+  let memoryPrefetch: MemoryPrefetch | null = null;
+  if (memoryRecall) {
+    const query = extractLastUserText(messages);
+    const sideQuery = buildSideQuery(client, model);
+    memoryPrefetch = startMemoryPrefetch(
+      query,
+      sideQuery,
+      memoryRecall.alreadySurfaced,
+      memoryRecall.sessionMemoryBytes,
+      signal
+    );
+  }
+
   while (true) {
 
     if (compaction) {
       runCompressionPipeline(messages, compaction);
+    }
+
+    if (memoryPrefetch && memoryPrefetch.settled && !memoryPrefetch.consumed) {
+      memoryPrefetch.consumed = true;
+      const memories = await memoryPrefetch.promise;
+      if (memories.length > 0) {
+        const injectionText = formatMemoriesForInjection(memories);
+        const last = messages[messages.length - 1];
+        if (last && last.role === "user") {
+          if (typeof last.content === "string") {
+            last.content = last.content + "\n\n" + injectionText;
+          } else if (Array.isArray(last.content)) {
+            last.content.push({ type: "text", text: injectionText });
+          }
+        } else {
+          // Defensive fallback matching the reference implementation: if
+          // the last message somehow isn't role "user" (shouldn't happen
+          // at this call site), push a new one rather than corrupting an
+          // assistant message.
+          messages.push({ role: "user", content: injectionText });
+        }
+        for (const m of memories) {
+          memoryRecall!.alreadySurfaced.add(m.path);
+          memoryRecall!.sessionMemoryBytes += Buffer.byteLength(m.content);
+        }
+      }
     }
 
     // Tools with content_block_stop already fired during this turn's stream

@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { dirname, resolve } from "node:path";
 import { join } from "path";
+import { buildMemoryPromptSection } from "./memory.js";
 import { toolRegistry } from "./tools.js";
 
 const IDENTITY_SECTION = `You are nac-mini-agent, a lightweight coding assistant CLI.
@@ -174,5 +175,6 @@ export function buildSystemPrompt(): string {
     OUTPUT_EFFICIENCY_SECTION,
     buildEnvironmentSection(),
     loadClaudeMd(),
+    buildMemoryPromptSection(),
   ].join("\n\n");
 }
